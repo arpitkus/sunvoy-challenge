@@ -12,6 +12,8 @@ const PASSWORD = process.env.PASSWORD!;
 
 const LOGIN_URL    = `${BASE}/login`;
 const USERS_API    = `${BASE}/api/users`;
+const TOKENS_URL   = `${BASE}/settings/tokens`;
+const SETTINGS_API = `${API}/api/settings`;
 
 const COOKIE_STORE = 'cookie-store.json';
 const COOKIE_TTL   = 86400;
@@ -108,6 +110,67 @@ async function fetchUsers(): Promise<any[]> {
   const data = await res.json() as any[];
   return data;
 }
+
+//  /settings/tokens
+async function fetchTokens(): Promise<Record<string,string>> {
+  const res = await fetch(TOKENS_URL, {
+    method: 'GET',
+    headers: { 'Cookie': cookieJar.trim() }
+  });
+  const html = await res.text();
+  const $ = cheerio.load(html);
+
+  const keys = ['access_token','openId','userId','apiuser','operateId','language'] as const;
+  const out: Record<string,string> = {};
+  keys.forEach(k => {
+    const val = $(`input#${k}`).val();
+    if (!val || typeof val !== 'string') {
+      throw new Error(`Token field "${k}" not found`);
+    }
+    out[k] = val;
+  });
+  return out;
+}
+
+//  /api/settings
+function createSignedRequest(input: Record<string,string>): string {
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const params: Record<string,string> = { ...input, timestamp };
+
+  const payload = Object
+    .keys(params)
+    .sort()
+    .map(k => `${k}=${encodeURIComponent(params[k])}`)
+    .join('&');
+
+  // secret from site JS
+  const SECRET = process.env.SECRET!;
+  const hmac = crypto.createHmac('sha1', SECRET);
+
+  hmac.update(payload);
+  const checkcode = hmac.digest('hex').toUpperCase();
+
+  return `${payload}&checkcode=${checkcode}`;
+}
+
+// current user data 
+async function fetchCurrentUser(tokens: Record<string,string>): Promise<{ id: string; firstName: string; lastName: string; email: string }> {
+  const body = createSignedRequest(tokens);
+  const res = await fetch(SETTINGS_API, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Origin': BASE,
+      'Cookie': cookieJar.trim()
+    },
+    body
+  });
+  if (!res.ok) throw new Error(`Current-user fetch failed (${res.status})`);
+  const user = await res.json() as { id: string; firstName: string; lastName: string; email: string };
+  return user;
+}
+
+
 (async () => {
   try {
     if (!loadCookies()) {
@@ -117,11 +180,18 @@ async function fetchUsers(): Promise<any[]> {
       console.log('Logged in. Cookies: are :', cookieJar);
       saveCookies();
     }
-    const users   = await fetchUsers();
+    const users = await fetchUsers();
     console.log(`Fetched ${users.length} users`);
 
-    writeFileSync('users.json', JSON.stringify(users, null, 2), 'utf-8');
-    console.log(`Successfully wrote ${users.length} entries to users.json`);
+    const tokens = await fetchTokens();
+    console.log('Tokens parsed:', tokens);
+
+    const current = await fetchCurrentUser(tokens);
+    console.log('Current user:', current);
+
+    const all = [...users, current];
+    writeFileSync('users.json', JSON.stringify(all, null, 2), 'utf-8');
+    console.log(`Successfully wrote ${all.length} entries to users.json`);
   } catch (err) {
     console.error('getting  Error :', err);
   }
