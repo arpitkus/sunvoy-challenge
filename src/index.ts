@@ -13,6 +13,10 @@ const PASSWORD = process.env.PASSWORD!;
 const LOGIN_URL    = `${BASE}/login`;
 const USERS_API    = `${BASE}/api/users`;
 
+const COOKIE_STORE = 'cookie-store.json';
+const COOKIE_TTL   = 86400;
+
+
 let cookieJar = '';
 
 function updateCookies(setCookies: string[]) {
@@ -28,6 +32,29 @@ function updateCookies(setCookies: string[]) {
   });
 }
 
+function loadCookies(): boolean {
+  if (!existsSync(COOKIE_STORE)) return false;
+  try {
+    const { cookieJar: saved, created }: { cookieJar: string; created: number } =
+      JSON.parse(readFileSync(COOKIE_STORE, 'utf-8'));
+    if (Date.now()/1000 - created < COOKIE_TTL) {
+      cookieJar = saved;
+      console.log(' Using the cookies  FROM the STORE');
+      return true;
+    }
+  } catch {
+  }
+  return false;
+}
+
+function saveCookies() {
+  writeFileSync(
+    COOKIE_STORE,
+    JSON.stringify({ cookieJar, created: Math.floor(Date.now()/1000) }),
+    'utf-8'
+  );
+  console.log('Cookies saved too sttore');
+}
 
 //  first task to get the login page by hitting end point
 async function getLoginNonce(): Promise<string> {
@@ -83,13 +110,14 @@ async function fetchUsers(): Promise<any[]> {
 }
 (async () => {
   try {
-    const nonce = await getLoginNonce();
-    console.log('Nonce:', nonce);
-
-    await login(nonce);
-    console.log('Logged in. Cookies:', cookieJar);
-
-    const users = await fetchUsers();
+    if (!loadCookies()) {
+      const nonce = await getLoginNonce();
+      console.log('Nonce:', nonce);
+      await login(nonce);
+      console.log('Logged in. Cookies: are :', cookieJar);
+      saveCookies();
+    }
+    const users   = await fetchUsers();
     console.log(`Fetched ${users.length} users`);
 
     writeFileSync('users.json', JSON.stringify(users, null, 2), 'utf-8');
